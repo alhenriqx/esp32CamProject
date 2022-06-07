@@ -48,7 +48,7 @@ void removeDir(fs::FS &fs, const char * path){
     }
 }
 
-void readFile(fs::FS &fs, const char * path){
+void readFile(fs::FS &fs, const char * path, uint8_t **ppbuf, int *pLen){
     Serial.printf("Reading file: %s\n", path);
 
     File file = fs.open(path);
@@ -58,10 +58,22 @@ void readFile(fs::FS &fs, const char * path){
     }
 
     Serial.print("Read from file: ");
-    while(file.available()){
-        Serial.write(file.read());
+    size_t size = file.size();
+
+    uint8_t *buf = (uint8_t*)malloc(sizeof(uint8_t) * size);
+
+    if (buf != NULL)
+    {
+      file.read(buf, size);
+    }
+    else
+    {
+      Serial.println("mem alloc to read failed");
     }
     file.close();
+
+    *ppbuf = buf;
+    *pLen = (int)size;
 }
 
 void writeFile(fs::FS &fs, const char * path, const char * message){

@@ -27,6 +27,7 @@
 
 extern uint8_t  __thermalShutdown;
 extern void removeAllFiles(fs::FS &fs, const char *dirname);
+extern void readFile(fs::FS &fs, const char * path, uint8_t **ppbuf, int *pLen);
 
 #define ENROLL_CONFIRM_TIMES 5
 #define FACE_ID_SAVE_NUMBER 7
@@ -239,7 +240,61 @@ static esp_err_t stoprecord_handler(httpd_req_t *req){
 //-------------------------------------------------------
 // play all pictures
 //-------------------------------------------------------
-static esp_err_t playAll_handler(httpd_req_t *req){
+static esp_err_t playAll_handler(httpd_req_t *req)
+{
+  esp_err_t res = ESP_OK;
+  //
+  // this will be in a loop
+  //
+  fs::FS &fs = SD_MMC;
+  
+  File root = fs.open("/pics");
+  if(!root)
+  {
+      Serial.println("Failed to open directory");
+      return res;
+  }
+  
+  if(!root.isDirectory()){
+      Serial.println("Not a directory");
+      return res;
+  }
+
+  File file = root.openNextFile();
+  
+  while(file)
+  {
+    if(file.isDirectory())
+    {
+      Serial.print("  DIR : ");
+      Serial.println(file.name());            
+    }
+    else
+    {
+      esp_err_t res = ESP_OK;
+      httpd_resp_set_type(req, "image/jpeg");
+      httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
+      httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+      
+      uint8_t* buf;
+      int len = 0;
+      
+      readFile(SD_MMC, file.name(), &buf, &len);
+      
+      res = httpd_resp_send(req, (const char *)buf, len);
+      
+      free(buf);
+
+      //
+      // wait a little here
+      //
+      delay(500);
+    }
+
+    file = root.openNextFile();
+  }
+
+  return res;
 }
 
 
