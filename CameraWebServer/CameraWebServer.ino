@@ -23,8 +23,8 @@
 #define WDT_TIMEOUT 20
 #include "camera_pins.h"
 
-const char* ssid = "PLAYLAB_2GEXT";
-const char* password = "Marine13@!";
+const char* ssid = "";
+const char* password = "";
 #ifdef __cplusplus
   extern "C" {
  #endif
