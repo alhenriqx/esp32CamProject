@@ -57,7 +57,6 @@ void readFile(fs::FS &fs, const char * path, uint8_t **ppbuf, int *pLen){
         return;
     }
 
-    Serial.print("Read from file: ");
     size_t size = file.size();
 
     uint8_t *buf = (uint8_t*)malloc(sizeof(uint8_t) * size);
@@ -69,6 +68,7 @@ void readFile(fs::FS &fs, const char * path, uint8_t **ppbuf, int *pLen){
     else
     {
       Serial.println("mem alloc to read failed");
+      size = 0;
     }
     file.close();
 

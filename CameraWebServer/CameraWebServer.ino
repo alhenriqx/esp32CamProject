@@ -20,7 +20,7 @@
 //#define CAMERA_MODEL_M5STACK_ESP32CAM // No PSRAM
 #define CAMERA_MODEL_AI_THINKER // Has PSRAM
 //#define CAMERA_MODEL_TTGO_T_JOURNAL // No PSRAM
-#define WDT_TIMEOUT 10
+#define WDT_TIMEOUT 20
 #include "camera_pins.h"
 
 const char* ssid = "PLAYLAB_2GEXT";
@@ -35,10 +35,18 @@ const char* password = "Marine13@!";
 }
 #endif
 
+hw_timer_t * g_timer = NULL;
 uint8_t  __thermalShutdown = 0;
 void startCameraServer();
+//void setup_global_timer();
+unsigned long taskDelay = 0;
+unsigned long snapShotTimer = 0;
 
+bool snapShotEnabled = false;
+//void onTimer();
 extern void createDir(fs::FS &fs, const char * path);
+extern void snapshot_timer();
+
 void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
@@ -46,6 +54,8 @@ void setup() {
 
   esp_task_wdt_init(WDT_TIMEOUT, true); //enable panic so ESP32 restarts
   esp_task_wdt_add(NULL); //add current thread to WDT watch
+
+  
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -150,42 +160,61 @@ void setup() {
     }
 
     createDir(SD_MMC, "/pics");
+
+    //setup_global_timer();   
+
+    taskDelay = millis();
+    snapShotTimer = millis();
   }
 }
 
-void loop() {
-  // put your main code here, to run repeatedly:
-  float temp = (temprature_sens_read() - 32) / 1.8;
-
-  Serial.print(temp);
-  Serial.println(" C");
-
-  if (temp > 82.0)
+void loop()
+{
+  if (snapShotEnabled)
   {
     //
-    // shut things down
+    // see if timer is ready
     //
-    sensor_t * s = esp_camera_sensor_get(); 
-    s->set_colorbar(s, 0);
-    digitalWrite(4, LOW );
-    __thermalShutdown = 1;
+    if ((millis() - snapShotTimer) > 1000)
+    {
+      snapshot_timer();
+      snapShotTimer = millis();
+      esp_task_wdt_reset();
+    }
   }
-  else
-  {
-    //
-    // because the temperature return is transient we cannot reliably
-    // depend on it. So as soon as the temperature is below 82C
-    // we allow the camera to operate
-    //
-    __thermalShutdown = 0;  
-  }
- 
-  delay(5000);
 
-  if (WiFi.status() == WL_CONNECTED)
+  if ( (millis() - taskDelay) > 5000)
   {
-    Serial.println("Resetting WDT timer");
-    esp_task_wdt_reset();
-  }
- 
+      float temp = (temprature_sens_read() - 32) / 1.8;
+      
+      Serial.print(temp);
+      Serial.println(" C");
+      
+      if (temp > 82.0)
+      {
+        //
+        // shut things down
+        //
+        sensor_t * s = esp_camera_sensor_get(); 
+        s->set_colorbar(s, 0);
+        digitalWrite(4, LOW );
+        __thermalShutdown = 1;
+      }
+      else
+      {
+        //
+        // because the temperature return is transient we cannot reliably
+        // depend on it. So as soon as the temperature is below 82C
+        // we allow the camera to operate
+        //
+        __thermalShutdown = 0;  
+      }
+    
+      if (WiFi.status() == WL_CONNECTED)
+      {
+          //Serial.println("Resetting WDT timer");
+          esp_task_wdt_reset();
+      }
+      taskDelay = millis();
+  } 
 }

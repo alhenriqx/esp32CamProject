@@ -13,6 +13,7 @@
 // limitations under the License.
 #include "esp_http_server.h"
 #include "esp_timer.h"
+#include <esp_task_wdt.h>
 #include "esp_camera.h"
 #include "img_converters.h"
 #include "camera_index.h"
@@ -26,6 +27,8 @@
 #include "SD_MMC.h"
 
 extern uint8_t  __thermalShutdown;
+//extern hw_timer_t * g_timer;
+extern bool snapShotEnabled;
 extern void removeAllFiles(fs::FS &fs, const char *dirname);
 extern void readFile(fs::FS &fs, const char * path, uint8_t **ppbuf, int *pLen);
 
@@ -53,6 +56,11 @@ typedef struct {
         httpd_req_t *req;
         size_t len;
 } jpg_chunking_t;
+
+typedef struct {
+   char fileName[80];
+   size_t pos;
+} pic_arg_t;
 
 #define PART_BOUNDARY "123456789000000000000987654321"
 static const char* _STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
@@ -224,16 +232,123 @@ static size_t jpg_encode_stream(void * arg, size_t index, const void* data, size
 }
 
 //-------------------------------------------------------
-// start recording
+// file jpeg chunk encoder
 //-------------------------------------------------------
-static esp_err_t startrecord_handler(httpd_req_t *req){
+static size_t jpg_encode_file_stream(void *arg, size_t index, const void* pdata, size_t len)
+{
+  fs::FS &fs = SD_MMC;
+
+  Serial.printf("jpg_encode_file_stream is called\n\r");
+
+  pic_arg_t* pInfo = (pic_arg_t *)arg;
+  //
+  // open file
+  //
+  Serial.printf("jpg_encode_file_stream opening file %s\n\r", pInfo->fileName);
+  File file_jpg = fs.open(pInfo->fileName, FILE_WRITE);
+
+  //
+  // seek to end of file
+  //
+  Serial.printf("jpg_encode_file_stream moving to pos %d\n\r", pInfo->pos);
+  file_jpg.seek(pInfo->pos);
+  
+  //
+  // write data and length
+  //
+  Serial.printf("jpg_encode_file_stream writing %d bytes\n\r", len);
+  file_jpg.write((const uint8_t *)pdata, len);
+
+  pInfo->pos += len;
+
+  //
+  // close file
+  //
+  file_jpg.close();
+
+  return len;
 }
 
+//-------------------------------------------------------
+// fired every 5 sec
+//-------------------------------------------------------
+void snapshot_timer()
+{
+    camera_fb_t * fb = NULL;
+    esp_err_t res = ESP_OK;
+
+    Serial.printf("Running snapshot_timer\n\r");
+
+    //timerAlarmDisable(g_timer);
+
+    Serial.printf("getting camera image\n\r");
+    
+    fb = esp_camera_fb_get();
+
+    Serial.printf("called camera to receive data object\n\r");
+    if (!fb)
+    {
+        Serial.println("Camera capture failed");        
+        return;
+    }
+
+    Serial.printf("Running snapshot_timer\n\r");
+    
+    //
+    // transfer bytes to file.
+    //
+    int64_t fr_start = esp_timer_get_time();
+
+    pic_arg_t pic_info = {{0}, 0};
+
+    sprintf(pic_info.fileName, "/pics/image%ul.jpg", fr_start);
+
+    Serial.printf("snapshot file name: %s\n\r", pic_info.fileName);
+
+    pic_info.pos = 0;
+
+    if(fb->format == PIXFORMAT_JPEG)
+    {
+        Serial.println("snapshot_timer - Pixformat_jpeg captured by camera");
+        res = jpg_encode_file_stream(&pic_info, 0, (const char *)fb->buf, fb->len) ? ESP_OK: ESP_FAIL;
+    }
+    else
+    {
+        Serial.println("snapshot_timer - other foramt captured by camera");
+        res = frame2jpg_cb(fb, 80, jpg_encode_file_stream, &pic_info)?ESP_OK:ESP_FAIL;
+    }
+    
+    esp_camera_fb_return(fb);
+    Serial.printf("snapshot_timer Exiting\n\r");
+ 
+    return;
+}
+
+//-------------------------------------------------------
+// start recording
+//-------------------------------------------------------
+static esp_err_t startrecord_handler(httpd_req_t *req)
+{
+  //
+  // Start an alarm
+  //
+  Serial.println("startrecord_handler called");
+  snapShotEnabled = true;
+  Serial.println("timer enabled");
+  
+  return ESP_OK;
+}
 
 //-------------------------------------------------------
 // stop recording
 //-------------------------------------------------------
-static esp_err_t stoprecord_handler(httpd_req_t *req){
+static esp_err_t stoprecord_handler(httpd_req_t *req)
+{
+  Serial.println("timer stopped");
+  //timerAlarmDisable(g_timer);
+  snapShotEnabled = false;
+
+  return ESP_OK;
 }
 
 
@@ -247,6 +362,8 @@ static esp_err_t playAll_handler(httpd_req_t *req)
   // this will be in a loop
   //
   fs::FS &fs = SD_MMC;
+
+  Serial.printf("play back all files invoked\n\r");
   
   File root = fs.open("/pics");
   if(!root)
@@ -261,38 +378,60 @@ static esp_err_t playAll_handler(httpd_req_t *req)
   }
 
   File file = root.openNextFile();
+
+  res = httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
+  if(res != ESP_OK){
+      return res;
+  }
   
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  
+  uint8_t* buf = NULL;
+  int len = 0;
+  char * part_buf[64];
   while(file)
   {
-    if(file.isDirectory())
-    {
-      Serial.print("  DIR : ");
-      Serial.println(file.name());            
-    }
-    else
-    {
-      esp_err_t res = ESP_OK;
-      httpd_resp_set_type(req, "image/jpeg");
-      httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
-      httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-      
-      uint8_t* buf;
-      int len = 0;
-      
-      readFile(SD_MMC, file.name(), &buf, &len);
-      
-      res = httpd_resp_send(req, (const char *)buf, len);
-      
-      free(buf);
-
-      //
-      // wait a little here
-      //
-      delay(500);
-    }
-
-    file = root.openNextFile();
+      if(!file.isDirectory())
+      {        
+        readFile(SD_MMC, file.name(), &buf, &len);
+  
+        if (len > 0 && buf != NULL)
+        {
+          Serial.printf("http sending %d bytes\n\r", len);  
+          //res = httpd_resp_send(req, (const char *)buf, len);
+          
+          res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+          
+          if(res == ESP_OK){
+            size_t hlen = snprintf((char *)part_buf, 64, _STREAM_PART, len);
+            Serial.printf("sending stream info %s : len %d\n\r", part_buf, hlen);
+            res = httpd_resp_send_chunk(req, (const char *)part_buf, hlen);
+          }
+          
+          if(res == ESP_OK){
+            Serial.printf("sending chunk %d\n\r", len);
+            res = httpd_resp_send_chunk(req, (const char *)buf, len);
+          }
+            
+          free(buf);
+          buf = NULL;          
+          
+          //
+          // wait a little here
+          //
+          delay(500);
+        }
+        else
+        {
+          Serial.printf("read file failed\n\r");
+        }
+      }
+  
+      file = root.openNextFile();
+      esp_task_wdt_reset();
   }
+
+  Serial.printf("Done playing all images\n\r");
 
   return res;
 }
@@ -301,8 +440,12 @@ static esp_err_t playAll_handler(httpd_req_t *req)
 //-------------------------------------------------------
 // erase all pictures
 //-------------------------------------------------------
-static esp_err_t eraseAll_handler(httpd_req_t *req){
+static esp_err_t eraseAll_handler(httpd_req_t *req)
+{
+  Serial.printf("erasing all files called\n\r");
   removeAllFiles(SD_MMC, "/pics");
+
+  return ESP_OK;
 }
 
 
@@ -341,9 +484,11 @@ static esp_err_t capture_handler(httpd_req_t *req){
     if(!detection_enabled || fb->width > 400){
         size_t fb_len = 0;
         if(fb->format == PIXFORMAT_JPEG){
+            Serial.println("image is pixformat");
             fb_len = fb->len;
             res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
         } else {
+            Serial.println("image is jpg chunking");
             jpg_chunking_t jchunk = {req, 0};
             res = frame2jpg_cb(fb, 80, jpg_encode_stream, &jchunk)?ESP_OK:ESP_FAIL;
             httpd_resp_send_chunk(req, NULL, 0);
@@ -534,6 +679,7 @@ static esp_err_t stream_handler(httpd_req_t *req){
         if(res != ESP_OK){
             break;
         }
+        /*
         int64_t fr_end = esp_timer_get_time();
 
         int64_t ready_time = (fr_ready - fr_start)/1000;
@@ -553,6 +699,7 @@ static esp_err_t stream_handler(httpd_req_t *req){
             (uint32_t)ready_time, (uint32_t)face_time, (uint32_t)recognize_time, (uint32_t)encode_time, (uint32_t)process_time,
             (detected)?"DETECTED ":"", face_id
         );
+        */
 
         //
         // check temperature here and if too hot break the loop
@@ -563,6 +710,7 @@ static esp_err_t stream_handler(httpd_req_t *req){
           Serial.println("esp32 running hot turning off stream");
           break;     
         }
+        esp_task_wdt_reset();
     }
 
     last_frame = 0;
@@ -810,7 +958,7 @@ void startCameraServer(){
         httpd_register_uri_handler(camera_httpd, &stop_record_uri);
 
         httpd_register_uri_handler(camera_httpd, &eraseAll_uri);
-        httpd_register_uri_handler(camera_httpd, &playAll_uri);
+        
     }
 
     config.server_port += 1;
@@ -818,5 +966,6 @@ void startCameraServer(){
     Serial.printf("Starting stream server on port: '%d'\n", config.server_port);
     if (httpd_start(&stream_httpd, &config) == ESP_OK) {
         httpd_register_uri_handler(stream_httpd, &stream_uri);
+        httpd_register_uri_handler(stream_httpd, &playAll_uri);
     }
 }
