@@ -23,8 +23,6 @@
 #define WDT_TIMEOUT 20
 #include "camera_pins.h"
 
-const char* ssid = "";
-const char* password = "";
 #ifdef __cplusplus
   extern "C" {
  #endif
@@ -38,6 +36,7 @@ const char* password = "";
 hw_timer_t * g_timer = NULL;
 uint8_t  __thermalShutdown = 0;
 void startCameraServer();
+int StringSplit(String sInput, char cDelim, String sParams[], int iMaxParams);
 //void setup_global_timer();
 unsigned long taskDelay = 0;
 unsigned long snapShotTimer = 0;
@@ -45,6 +44,7 @@ unsigned long snapShotTimer = 0;
 bool snapShotEnabled = false;
 //void onTimer();
 extern void createDir(fs::FS &fs, const char * path);
+extern void readFile(fs::FS &fs, const char * path, uint8_t **ppbuf, int *pLen);
 extern void snapshot_timer();
 
 void setup() {
@@ -119,21 +119,6 @@ void setup() {
   s->set_hmirror(s, 1);
 #endif
 
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println("WiFi connected");
-
-  startCameraServer();
-
-  Serial.print("Camera Ready! Use 'http://");
-  Serial.print(WiFi.localIP());
-  Serial.println("' to connect");
-
   if(!SD_MMC.begin())
   {
         Serial.println("Card Mount Failed");       
@@ -159,13 +144,52 @@ void setup() {
         Serial.println("UNKNOWN");
     }
 
-    createDir(SD_MMC, "/pics");
+    char *unsecureBuffer = NULL;
+    int buffer_len = 0;
+    
+    readFile(SD_MMC, "/wifiData.txt", (uint8_t **)&unsecureBuffer, &buffer_len);
 
-    //setup_global_timer();   
+    if (unsecureBuffer != NULL)
+    {
+        String params[2];
 
-    taskDelay = millis();
-    snapShotTimer = millis();
-  }
+        Serial.printf("buffer length:%d\n\r". buffer_len);
+        
+        if (StringSplit(unsecureBuffer, ',', params, 2) != 2)
+        {
+            Serial.println("failed to retrieve secure data");
+        }
+        else
+        {
+           Serial.printf("connecting with %s - %s\n\r", params[0].c_str(), params[1].c_str());
+           WiFi.begin(params[0].c_str(), params[1].c_str());
+
+           while (WiFi.status() != WL_CONNECTED) {
+              delay(500);
+              Serial.print(".");
+            }
+           Serial.println("");
+           Serial.println("WiFi connected");
+          
+           startCameraServer();
+          
+           Serial.printf("Camera Ready! Use 'http://%s to connect\n\r", WiFi.localIP());
+      
+           createDir(SD_MMC, "/pics");
+      
+           //setup_global_timer();   
+      
+           taskDelay = millis();
+           snapShotTimer = millis();                    
+        }
+        free (unsecureBuffer);      
+    }
+    else
+    {
+        Serial.println("failed to read file");
+    } //else  
+    
+  }//else
 }
 
 void loop()
@@ -217,4 +241,32 @@ void loop()
       }
       taskDelay = millis();
   } 
+}
+
+int StringSplit(String sInput, char cDelim, String sParams[], int iMaxParams)
+{
+    int iParamCount = 0;
+    int iPosDelim, iPosStart = 0;
+
+    do {
+        // Searching the delimiter using indexOf()
+        iPosDelim = sInput.indexOf(cDelim,iPosStart);
+        if (iPosDelim > (iPosStart+1)) {
+            // Adding a new parameter using substring() 
+            sParams[iParamCount] = sInput.substring(iPosStart,iPosDelim-1);
+            iParamCount++;
+            // Checking the number of parameters
+            if (iParamCount >= iMaxParams) {
+                return (iParamCount);
+            }
+            iPosStart = iPosDelim + 1;
+        }
+    } while (iPosDelim >= 0);
+    if (iParamCount < iMaxParams) {
+        // Adding the last parameter as the end of the line
+        sParams[iParamCount] = sInput.substring(iPosStart);
+        iParamCount++;
+    }
+
+    return (iParamCount);
 }
