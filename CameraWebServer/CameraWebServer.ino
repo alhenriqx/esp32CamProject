@@ -1,9 +1,9 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <esp_task_wdt.h>
+
 #include "FS.h"
 #include "SD_MMC.h"
-
 
 //
 // WARNING!!! PSRAM IC required for UXGA resolution and high JPEG quality
@@ -151,18 +151,18 @@ void setup() {
 
     if (unsecureBuffer != NULL)
     {
-        String params[2];
+        char params[2][80];
 
-        Serial.printf("buffer length:%d\n\r". buffer_len);
+        Serial.printf("buffer length:%d\n\r", buffer_len);
         
-        if (StringSplit(unsecureBuffer, ',', params, 2) != 2)
+        if (StringSplit((char *)unsecureBuffer, buffer_len - 2, ' ', params, 2) != 2)
         {
             Serial.println("failed to retrieve secure data");
         }
         else
         {
-           Serial.printf("connecting with %s - %s\n\r", params[0].c_str(), params[1].c_str());
-           WiFi.begin(params[0].c_str(), params[1].c_str());
+           Serial.printf("connecting with %s - %s\n", params[0], params[1]);
+           WiFi.begin(params[0], params[1]);
 
            while (WiFi.status() != WL_CONNECTED) {
               delay(500);
@@ -173,7 +173,7 @@ void setup() {
           
            startCameraServer();
           
-           Serial.printf("Camera Ready! Use 'http://%s to connect\n\r", WiFi.localIP());
+           Serial.printf("Camera Ready! Use 'http://%s to connect\n\r", WiFi.localIP().toString().c_str());
       
            createDir(SD_MMC, "/pics");
       
@@ -199,7 +199,7 @@ void loop()
     //
     // see if timer is ready
     //
-    if ((millis() - snapShotTimer) > 1000)
+    if ((millis() - snapShotTimer) > 300)
     {
       snapshot_timer();
       snapShotTimer = millis();
@@ -233,7 +233,7 @@ void loop()
         //
         __thermalShutdown = 0;  
       }
-    
+
       if (WiFi.status() == WL_CONNECTED)
       {
           //Serial.println("Resetting WDT timer");
@@ -243,30 +243,35 @@ void loop()
   } 
 }
 
-int StringSplit(String sInput, char cDelim, String sParams[], int iMaxParams)
+int StringSplit(char *sInput, int inputLen, char cDelim, char sParams[][80], int iMaxParams)
 {
     int iParamCount = 0;
-    int iPosDelim, iPosStart = 0;
+    int iPosDelim, iPosCurrent = 0;
 
-    do {
-        // Searching the delimiter using indexOf()
-        iPosDelim = sInput.indexOf(cDelim,iPosStart);
-        if (iPosDelim > (iPosStart+1)) {
-            // Adding a new parameter using substring() 
-            sParams[iParamCount] = sInput.substring(iPosStart,iPosDelim-1);
-            iParamCount++;
-            // Checking the number of parameters
-            if (iParamCount >= iMaxParams) {
-                return (iParamCount);
-            }
-            iPosStart = iPosDelim + 1;
-        }
-    } while (iPosDelim >= 0);
-    if (iParamCount < iMaxParams) {
-        // Adding the last parameter as the end of the line
-        sParams[iParamCount] = sInput.substring(iPosStart);
-        iParamCount++;
+    while (*sInput && inputLen > 0)
+    {
+      if (*sInput != cDelim)
+      {
+         Serial.printf("SplitString %c , pos=%d, index=%d\n", *sInput, iPosCurrent, iParamCount);
+         sParams[iParamCount][iPosCurrent] = *sInput;
+         iPosCurrent++;
+      }
+      else
+      {
+         Serial.printf("SplitString end of string - length remaining %d pos=%d, index=%d", inputLen, iPosCurrent, iParamCount);
+         sParams[iParamCount][iPosCurrent] = '\0';
+         iParamCount++;
+         iPosCurrent = 0;        
+      }
+
+      sInput++;
+      inputLen--;
     }
+
+    Serial.printf("SplitString end of string - length remaining %d, index=%d, pos=%d\n", inputLen, iParamCount, iPosCurrent);
+    sParams[iParamCount][iPosCurrent] = '\0';
+
+    iParamCount++;
 
     return (iParamCount);
 }
