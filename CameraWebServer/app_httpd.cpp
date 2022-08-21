@@ -419,7 +419,7 @@ static esp_err_t playAll_handler(httpd_req_t *req)
           //
           // wait a little here
           //
-          delay(500);
+          delay(200);
         }
         else
         {

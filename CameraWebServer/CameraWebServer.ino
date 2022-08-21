@@ -47,6 +47,8 @@ extern void createDir(fs::FS &fs, const char * path);
 extern void readFile(fs::FS &fs, const char * path, uint8_t **ppbuf, int *pLen);
 extern void snapshot_timer();
 
+void IRAM_ATTR ISR();
+
 void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
@@ -92,6 +94,9 @@ void setup() {
   }
 
  pinMode(4, OUTPUT);
+ //pinMode(16, INPUT_PULLDOWN);
+ //attachInterrupt(16, ISR, HIGH);
+ 
 #if defined(CAMERA_MODEL_ESP_EYE)
   pinMode(13, INPUT_PULLUP);
   pinMode(14, INPUT_PULLUP);
@@ -119,7 +124,7 @@ void setup() {
   s->set_hmirror(s, 1);
 #endif
 
-  if(!SD_MMC.begin())
+  if(!SD_MMC.begin("/sdcard", true))
   {
         Serial.println("Card Mount Failed");       
   }
@@ -192,6 +197,7 @@ void setup() {
   }//else
 }
 
+volatile int snapshot_counter = 0;
 void loop()
 {
   if (snapShotEnabled)
@@ -199,11 +205,18 @@ void loop()
     //
     // see if timer is ready
     //
-    if ((millis() - snapShotTimer) > 300)
+    if ((millis() - snapShotTimer) > 200)
     {
       snapshot_timer();
       snapShotTimer = millis();
       esp_task_wdt_reset();
+      snapshot_counter++;
+
+      if (snapshot_counter > 29)
+      {
+        snapshot_counter = 0;
+        snapShotEnabled = false;      
+      }
     }
   }
 
@@ -241,6 +254,11 @@ void loop()
       }
       taskDelay = millis();
   } 
+}
+
+void IRAM_ATTR ISR() 
+{
+    snapShotEnabled = true;
 }
 
 int StringSplit(char *sInput, int inputLen, char cDelim, char sParams[][80], int iMaxParams)
