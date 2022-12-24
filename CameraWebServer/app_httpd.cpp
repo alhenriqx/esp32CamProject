@@ -20,17 +20,18 @@
 #include "Arduino.h"
 
 #include "fb_gfx.h"
-#include "fd_forward.h"
-#include "fr_forward.h"
+// #include "fd_forward.h"
+//#include "fr_forward.h"
 
 #include "FS.h"
 #include "SD_MMC.h"
-
+#include "common.h"
 extern uint8_t  __thermalShutdown;
 //extern hw_timer_t * g_timer;
-extern bool snapShotEnabled;
+extern volatile bool snapShotEnabled;
 extern void removeAllFiles(fs::FS &fs, const char *dirname);
 extern void readFile(fs::FS &fs, const char * path, uint8_t **ppbuf, int *pLen);
+
 
 #define ENROLL_CONFIRM_TIMES 5
 #define FACE_ID_SAVE_NUMBER 7
@@ -240,6 +241,12 @@ static size_t jpg_encode_file_stream(void *arg, size_t index, const void* pdata,
 
   Serial.printf("jpg_encode_file_stream is called\n\r");
 
+  if (!snapShotEnabled && currentStatus == END)
+  {
+    Serial.printf("terminating jpg_encode_file_stream\n");
+    return 0;
+  }
+
   pic_arg_t* pInfo = (pic_arg_t *)arg;
   //
   // open file
@@ -278,6 +285,12 @@ void snapshot_timer()
     esp_err_t res = ESP_OK;
 
     Serial.printf("Running snapshot_timer\n\r");
+
+    if (currentStatus == END && !snapShotEnabled)
+    {
+      Serial.printf("terminating snapshot_timer\n");
+      return;
+    }
 
     //timerAlarmDisable(g_timer);
 
@@ -334,6 +347,7 @@ static esp_err_t startrecord_handler(httpd_req_t *req)
   //
   Serial.println("startrecord_handler called");
   snapShotEnabled = true;
+  currentStatus = RECORDING;
   Serial.println("timer enabled");
   
   return ESP_OK;
@@ -346,7 +360,9 @@ static esp_err_t stoprecord_handler(httpd_req_t *req)
 {
   Serial.println("timer stopped");
   //timerAlarmDisable(g_timer);
+  digitalWrite(4, LOW);
   snapShotEnabled = false;
+  currentStatus = RECORD_END;
 
   return ESP_OK;
 }
@@ -358,6 +374,8 @@ static esp_err_t stoprecord_handler(httpd_req_t *req)
 static esp_err_t playAll_handler(httpd_req_t *req)
 {
   esp_err_t res = ESP_OK;
+  digitalWrite(4, LOW);
+  currentStatus = PLAYBACK;
   //
   // this will be in a loop
   //
@@ -391,6 +409,7 @@ static esp_err_t playAll_handler(httpd_req_t *req)
   char * part_buf[64];
   while(file)
   {
+      snapShotEnabled = false;
       if(!file.isDirectory())
       {        
         readFile(SD_MMC, file.name(), &buf, &len);
@@ -419,7 +438,7 @@ static esp_err_t playAll_handler(httpd_req_t *req)
           //
           // wait a little here
           //
-          delay(200);
+          delay(50);
         }
         else
         {
@@ -432,6 +451,7 @@ static esp_err_t playAll_handler(httpd_req_t *req)
   }
 
   Serial.printf("Done playing all images\n\r");
+  currentStatus = END;
 
   return res;
 }
@@ -442,9 +462,11 @@ static esp_err_t playAll_handler(httpd_req_t *req)
 //-------------------------------------------------------
 static esp_err_t eraseAll_handler(httpd_req_t *req)
 {
+  digitalWrite(4, LOW);
+  currentStatus = ERASEING_FILES;
   Serial.printf("erasing all files called\n\r");
   removeAllFiles(SD_MMC, "/pics");
-
+  currentStatus = END;
   return ESP_OK;
 }
 
@@ -456,7 +478,11 @@ static esp_err_t capture_handler(httpd_req_t *req){
     //
     // turn on light
     //
+    Serial.println("Camera capture STATE changed: CAPTURING IMAGE");
+    currentStatus = CAPTURING_IMG;
+    
     digitalWrite(4, HIGH);
+    snapShotEnabled = false;
     //
     // give enough time for MCU to turn light on and photons to
     // return.
@@ -497,7 +523,9 @@ static esp_err_t capture_handler(httpd_req_t *req){
         esp_camera_fb_return(fb);
         int64_t fr_end = esp_timer_get_time();
         Serial.printf("JPG: %uB %ums\n", (uint32_t)(fb_len), (uint32_t)((fr_end - fr_start)/1000));
+        Serial.println("Camera capture STATE changed: CAPTURE completed");
         digitalWrite(4, LOW);
+        currentStatus = END;
         return res;
     }
 
@@ -507,6 +535,7 @@ static esp_err_t capture_handler(httpd_req_t *req){
         Serial.println("dl_matrix3du_alloc failed");
         httpd_resp_send_500(req);
         digitalWrite(4, LOW);
+        currentStatus = END;
         return ESP_FAIL;
     }
 
@@ -522,6 +551,7 @@ static esp_err_t capture_handler(httpd_req_t *req){
         Serial.println("to rgb888 failed");
         httpd_resp_send_500(req);
         digitalWrite(4, LOW);
+        currentStatus = END;
         return ESP_FAIL;
     }
 
@@ -545,6 +575,7 @@ static esp_err_t capture_handler(httpd_req_t *req){
     if(!s){
         Serial.println("JPEG compression failed");
         digitalWrite(4, LOW);
+        currentStatus = END;
         return ESP_FAIL;
     }
 
@@ -555,6 +586,7 @@ static esp_err_t capture_handler(httpd_req_t *req){
     // make sure light is off
     //
     digitalWrite(4, LOW );
+    currentStatus = END;
 }
 
 static esp_err_t stream_handler(httpd_req_t *req){
@@ -584,7 +616,11 @@ static esp_err_t stream_handler(httpd_req_t *req){
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
+    digitalWrite(4, HIGH);
+
     while(true){
+        snapShotEnabled = false;
+        currentStatus = STREAMING;
         detected = false;
         face_id = 0;
         fb = esp_camera_fb_get();
@@ -713,7 +749,10 @@ static esp_err_t stream_handler(httpd_req_t *req){
         esp_task_wdt_reset();
     }
 
+    digitalWrite(4, LOW);
+
     last_frame = 0;
+    currentStatus = END;
     return res;
 }
 
